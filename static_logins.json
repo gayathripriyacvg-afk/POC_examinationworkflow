@@ -1,0 +1,33 @@
+{
+  "superAdmin": [
+    {
+      "username": "superadmin",
+      "password": "password123",
+      "role": "SuperAdmin"
+    }
+  ],
+  "organization": [
+    {
+      "username": "orgadmin",
+      "password": "password123",
+      "role": "Organization",
+      "organizationId": "ORG_001"
+    }
+  ],
+  "scanner": [
+    {
+      "username": "scanneruser",
+      "password": "password123",
+      "role": "Scanner",
+      "scannerId": "SCAN_001"
+    }
+  ],
+  "answerBookletScanner": [
+    {
+      "username": "bookletscanner",
+      "password": "password123",
+      "role": "AnswerBookletScanner",
+      "deviceId": "DEVICE_001"
+    }
+  ]
+}

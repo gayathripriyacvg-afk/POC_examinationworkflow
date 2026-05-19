@@ -1,0 +1,19 @@
+services:
+  # 1. Super Admin Backend
+  - type: web
+    name: superadmin-backend
+    env: node
+    rootDir: SuperAdminFlow/backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGO_URI
+        value: placeholder_change_me_in_dashboard
+
+  # 2. Scanner Flow Backend
+  - type: web
+    name: scanner-backend
+    env: node
+    rootDir: ScannerFlow/backend
+    buildCommand: npm install
+    startCommand: npm start
