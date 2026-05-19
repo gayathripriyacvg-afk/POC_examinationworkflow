@@ -1,0 +1,76 @@
+:root {
+  /* Default Alpha Theme (Light Mode) */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f4f5;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --accent: #3b82f6;
+  --border: #e4e4e7;
+  --toolbar-bg: rgba(255, 255, 255, 0.85);
+}
+
+[data-theme='beta'] {
+  /* Beta Theme (Dark Mode) */
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --accent: #60a5fa;
+  --border: #27272a;
+  --toolbar-bg: rgba(24, 24, 27, 0.85);
+}
+
+[data-theme='delta'] {
+  /* Delta Theme (Reading/Sepia Mode) */
+  --bg-primary: #fdf6e3;
+  --bg-secondary: #eee8d5;
+  --text-primary: #657b83;
+  --text-secondary: #93a1a1;
+  --accent: #2aa198;
+  --border: #d5ccb7;
+  --toolbar-bg: rgba(238, 232, 213, 0.85);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Glassmorphism utils */
+.glass {
+  background: var(--toolbar-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Button Reset */
+button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
