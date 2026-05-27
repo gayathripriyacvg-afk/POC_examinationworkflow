@@ -1,0 +1,1532 @@
+import React, {
+  useCallback,
+  useState,
+  useMemo,
+  useEffect,
+  useContext,
+  useRef,
+} from "react";
+import { Button, Grid, Typography, FormControlLabel, Switch } from "@mui/material";
+import { useNavigate } from "react-router-dom";
+import { miniGaming } from "../services/services";
+import "../../../../styles/subjectiveprompte.css";
+import Subjective_Prompts from "../../context/SequenceAppContext";
+import CryptoJS from "crypto-js";
+import { toast, ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import "../../../../styles/global.css";
+import { styled, keyframes } from "@mui/system";
+import Webcam from "react-webcam";
+import ReactPlayer from "react-player";
+import { Visibility as EyeIcon } from "@mui/icons-material";
+import { debounce } from "lodash";
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css';
+import SoftKeyboard from './SoftKeyboard';
+import { evaluateAnswer } from './SubjectiveAutoEvaluation';
+// import lamejs from 'lamejs'; // You need to install: npm install lamejs
+import SaveIcon from '@mui/icons-material/Save';
+import useBlobSASToken from './BlobBaseUrl';
+
+const StyledButton = styled(Button)(({ theme, variantType }) => ({
+  borderRadius: "8px",
+  padding: "6px 16px",
+  textTransform: "none",
+  fontWeight: 500,
+  border: "1px solid",
+  borderColor: variantType === "listening" ? "#e57373" : "#673ab7",
+  backgroundColor: variantType === "listening" ? "#ffebee" : "#ede7f6",
+  color: variantType === "listening" ? "#d32f2f" : "#5e35b1",
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  "&:hover": {
+    backgroundColor: variantType === "listening" ? "#ffebee" : "#ede7f6",
+    borderColor: variantType === "listening" ? "#e57373" : "#673ab7",
+  },
+  img: {
+    height: "24px",
+    width: "24px",
+    color: "#410099 !important",
+  },
+}));
+
+const pulse = keyframes`
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+`;
+
+const QuillWrapper = styled('div')({
+  "& .ql-editor": {
+    minHeight: "25vh",
+    fontSize: "14px",
+    lineHeight: "1.5",
+  },
+  "& .ql-container": {
+    border: "1px solid #ccc",
+    borderRadius: "4px",
+  },
+});
+
+const PulseAnimationDiv = styled('div')({
+  animation: `${pulse} 1.5s infinite`,
+  width: '80px',
+  height: '80px',
+  borderRadius: '50%',
+  backgroundColor: '#e57373',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center'
+});
+
+export default function SubjectivePrompts() {
+  const [audioPlaying, setAudioPlaying] = useState(null);
+  const [isSaveDisabled, setIsSaveDisabled] = useState(true);
+  const [isSaveClicked, setIsSaveClicked] = useState(false);
+  console.log(isSaveClicked, "isSaveClickedisSaveClicked")
+  const [content, setContent] = useState("");
+  const [isSuccess, setIsSuccess] = useState(false);
+  console.log(isSuccess, "setIsSuccesssetIsSuccess")
+  const myContext = useContext(Subjective_Prompts);
+  const [data, setData] = useState([]);
+  console.log(data, "datadata")
+  const [sequence, setSequence] = useState(0);
+  const [attendedOption, setAttendedOption] = useState(null);
+  console.log(attendedOption, "attendedOptionattendedOption")
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const recognitionActive = useRef(false);
+  const [wordCount, setWordCount] = useState(0);
+  const maxWordCount = 150;
+  const [timer, setTimer] = useState(0);
+  const [capturing, setCapturing] = useState(false);
+  const timerRef = useRef(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [videoUrl, setVideoUrl] = useState(null);
+  const webcamRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const [showVideoRecorder, setShowVideoRecorder] = useState(false);
+  const [isDataLoaded, setIsDataLoaded] = useState(false); // Track if initial data is loaded to prevent UI flicker
+  const lastResultIndexRef = useRef(0);
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
+  const [micAccessDenied, setMicAccessDenied] = useState(false);
+
+  const [recordingMode, setRecordingMode] = useState('video');
+  const [audioStream, setAudioStream] = useState(null);
+  const [audioUrl, setAudioUrl] = useState(null);
+
+  const [savedMediaUrl, setSavedMediaUrl] = useState(null);
+  console.log(savedMediaUrl, "savedMediaUrlsavedMediaUrl")
+  const [isSavedMediaAudio, setIsSavedMediaAudio] = useState(false);
+  const [isAudioSaved, setIsAudioSaved] = useState(false);
+  const [isVideoSaved, setIsVideoSaved] = useState(false);
+
+  const {
+    sequencedata,
+    prevdatasequencedata,
+    unitcurrentprompt,
+    HelloFunction,
+    updateminutes,
+    updateseconds,
+    updatehours,
+    AssessmentPaginationFunction,
+    TrackerEngagementMode,
+    subjectiveSaveClicked,
+  } = myContext;
+  const prevPromptIdRef = useRef();
+  const editorRef = useRef(null);
+  const [trackerAttemptSeq, setTrackerAttemptSeq] = useState(() => {
+    const storedCounter = localStorage.getItem("trackerAttemptSeq");
+    return storedCounter ? parseInt(storedCounter, 10) : 0;
+  });
+  const [isSoftKeyboardVisible, setIsSoftKeyboardVisible] = useState(false)
+  const [currentpromptid, setCurrentpromptid] = useState(
+    sequencedata?.SequenceBuilder_PromptID
+  );
+  const lastTranscriptRef = useRef("");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  var promptid1 = unitcurrentprompt?.SequenceBuilder_PromptID;
+  var toShowMic = sequencedata?.Prompt_IsMicDisabled;
+  const sb_ExplainerActivityType = sequencedata?.sb_ExplainerActivityType;
+  const startdate = new Date();
+  var attendedOption1 = sequencedata?.Tracker_LastWord_arr;
+  var promptid = sequencedata?.SequenceBuilder_PromptID;
+  const userid = localStorage.getItem("id");
+  const secretKey = "AnotherSecretKey456";
+  const [showNote, setShowNote] = useState(false);
+  const [isTabVisible, setIsTabVisible] = useState(true);
+  const wasListeningRef = useRef(false);
+  const { transcript, resetTranscript } = useSpeechRecognition();
+  const [similarityResult, setSimilarityResult] = useState(null);
+  const sequenceIP = sequencedata?.SequenceBuilder_IP;
+  console.log(sequenceIP, "sequenceIPsequenceIP")
+  const promptStartTime = useRef(new Date());
+  const handleEyeClick = () => {
+    setShowNote(!showNote);
+  };
+  console.log(data[sequence]?.Prompt_IsMicDisabled, data[sequence]?.Prompt_IsUserVideoDisabled, data[sequence]?.Prompt_Language, "dsdas")
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // Guard: Don't update showVideoRecorder state until data is loaded
+    // This prevents the UI glitch where writing area and speaking activity UI alternate
+    const prompt = data[sequence];
+    if (!prompt) {
+      // Data not yet loaded, don't change showVideoRecorder state to avoid flickering
+      return;
+    }
+
+    const hasPreviousAnswer = (prevdatasequencedata && prevdatasequencedata.length > 0);
+    if (hasPreviousAnswer) {
+      setShowVideoRecorder(false);
+    } else {
+      // Only force open recorder if text input is also disabled, otherwise give choice.
+      if (prompt.Prompt_IsUserVideoDisabled === false && prompt.Prompt_IsMicDisabled === true && prompt.Prompt_IsTranscribeMicDisabled === true) {
+        setRecordingMode('video');
+        setShowVideoRecorder(true);
+      } else if (prompt.Prompt_IsUserVideoDisabled === true && prompt.Prompt_IsMicDisabled === false && prompt.Prompt_IsTranscribeMicDisabled === true) {
+        setRecordingMode('audio');
+        setShowVideoRecorder(true);
+      } else {
+        setShowVideoRecorder(false);
+      }
+    }
+    setIsSaveDisabled(true);
+    // Mark data as loaded so UI can render without flickering
+    setIsDataLoaded(true);
+  }, [data, sequence, prevdatasequencedata]);
+
+
+
+
+  const handleContinue = async () => {
+    HelloFunction("true");
+    setIsSuccess(false)
+  }
+
+  const config = useMemo(
+    () => ({
+      readonly: false,
+      buttons:
+        "bold,italic,underline,|,align,|,font,|,ul,ol,|,indent,|,paragraph,|,brush,",
+      toolbarAdaptive: false,
+      toolbarSticky: false,
+      toolbar: true,
+      showCharsCounter: false,
+      limitWords: 200,
+      enter: "BR",
+      cleanHTML: {
+        removeEmptyElements: true,
+        fillEmptyParagraph: false,
+        replaceNBSP: true,
+      },
+      disablePlugins: ["enter", "paragraph"],
+      askBeforePasteHTML: false,
+      defaultMode: 1,
+      events: {
+        keydown: (event) => {
+          if (listening && event.key === "Enter") {
+            event.preventDefault();
+          }
+        },
+        afterPaste: (event) => {
+          const text = event.clipboardData
+            .getData("text")
+            .replace(/\n/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+          event.preventDefault();
+          document.execCommand("insertText", false, text);
+        },
+      },
+    }),
+    []
+  );
+
+  const convertToMp3 = async (webmBlob) => {
+    try {
+      return new Blob([webmBlob], { type: 'audio/mp3' });
+    } catch (error) {
+      console.error('Error converting to MP3:', error);
+      return webmBlob;
+    }
+  };
+
+  const getAudioStream = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100,
+          channelCount: 1
+        }
+      });
+      setAudioStream(stream);
+      return stream;
+    } catch (error) {
+      console.error("Error accessing audio:", error);
+      toast.error("Failed to access microphone. Please check permissions.", {
+        position: "top-center",
+        autoClose: 3000,
+      });
+      return null;
+    }
+  };
+
+
+  const getWordCount = (text) => {
+    const cleanText = text.replace(/<[^>]*>/g, ' ')
+      .replace(/\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleanText ? cleanText.split(/\s+/).length : 0;
+  };
+
+
+  const handleContentChange = useCallback(
+    debounce((newContent) => {
+      const cleanContent = newContent
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const words = cleanContent.split(/\s+/).filter(Boolean);
+      const count = words.length;
+      setWordCount(count);
+
+      setContent(newContent);
+      setIsSaveClicked(false);
+
+      if (listening) {
+        setIsSaveDisabled(true);
+      } else {
+        setIsSaveDisabled(count > maxWordCount || !cleanContent);
+      }
+    }, 300),
+    [listening, maxWordCount]
+  );
+
+  const handlePaste = (event) => {
+    event.preventDefault();
+    const text = (event.clipboardData || window.Clipboard).getData('text');
+    const cleanText = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+
+    const editor = document.querySelector('.ql-editor');
+    if (editor) {
+      const selection = window.getSelection();
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(cleanText));
+      selection.collapseToEnd();
+    }
+  };
+
+  const handleSoftKeyPress = useCallback((key) => {
+    const quill = editorRef.current?.getEditor();
+    if (!quill) return;
+
+    // Temporarily disable the editor to prevent native keyboard
+    const editorEl = document.querySelector(".ql-editor");
+    if (editorEl) {
+      editorEl.setAttribute('inputmode', 'none'); // Prevent native keyboard
+    }
+
+    quill.focus();
+    let range = quill.getSelection();
+    if (!range) {
+      const length = quill.getLength();
+      quill.setSelection(length, 0);
+      range = quill.getSelection();
+    }
+    if (range.length > 0) {
+      quill.deleteText(range.index, range.length, 'user');
+    }
+    quill.insertText(range.index, key, 'user');
+    quill.setSelection(range.index + key.length, 0, 'user');
+
+    // Re-enable after a short delay
+    setTimeout(() => {
+      if (editorEl && !isSoftKeyboardVisible) {
+        editorEl.removeAttribute('inputmode');
+      }
+    }, 100);
+  }, [isSoftKeyboardVisible]);
+
+  const handleSoftKeySpace = useCallback(() => {
+    handleSoftKeyPress(' ');
+  }, [handleSoftKeyPress]);
+
+  const handleSoftKeyBackspace = useCallback(() => {
+    const quill = editorRef.current?.getEditor();
+    if (!quill) return;
+
+    quill.focus();
+    const range = quill.getSelection();
+    if (range) {
+      if (range.length > 0) {
+        quill.deleteText(range.index, range.length, 'user');
+        quill.setSelection(range.index, 0, 'user');
+      } else if (range.index > 0) {
+        quill.deleteText(range.index - 1, 1, 'user');
+        quill.setSelection(range.index - 1, 0, 'user');
+      }
+    } else {
+      const textContentLength = quill.getText().length;
+      if (textContentLength > 1) {
+        const deleteIndex = Math.max(0, textContentLength - 2);
+        quill.deleteText(deleteIndex, 1, 'user');
+        quill.setSelection(deleteIndex, 0, 'user');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const editorEl = document.querySelector(".ql-editor");
+    if (editorEl) {
+      if (isSoftKeyboardVisible) {
+        editorEl.setAttribute('inputmode', 'none');
+      } else {
+        editorEl.removeAttribute('inputmode');
+      }
+    }
+  }, [isSoftKeyboardVisible]);
+  let formattedTime = "";
+  const padWithZero = (num) => (num < 10 ? `0${num}` : num);
+
+  if (typeof updatehours !== "undefined" && updatehours !== null) {
+    formattedTime = `${padWithZero(updatehours)}:${padWithZero(
+      updateminutes
+    )}:${padWithZero(updateseconds)}`;
+  } else {
+    let updatehours = 0;
+    formattedTime = `${padWithZero(updatehours)}:${padWithZero(
+      updateminutes
+    )}:${padWithZero(updateseconds)}`;
+  }
+
+  const fetchPrompt = async () => {
+    try {
+      if (promptid != null) {
+        const response = await miniGaming.getsubjectivepmtnew(sequencedata?.SequenceBuilder_ID);
+        var getdata = null;
+        if (Array.isArray(response?.data)) {
+          getdata = response.data;
+        } else if (Array.isArray(response?.data?.dataset)) {
+          getdata = response.data.dataset;
+        } else if (Array.isArray(response?.data?.data)) {
+          getdata = response.data.data;
+        } else if (Array.isArray(response?.data?.results)) {
+          getdata = response.data.results;
+        } else if (response?.data && typeof response.data === 'object') {
+          const keys = Object.keys(response.data);
+          for (const key of keys) {
+            if (Array.isArray(response.data[key])) {
+              getdata = response.data[key];
+              break;
+            }
+          }
+        }
+        if (!Array.isArray(getdata)) {
+          console.error("No array found in response. Response structure:", response?.data);
+          setData([]);
+          return;
+        }
+        var currentPrompt = [];
+        if (promptid1 !== undefined) {
+          currentPrompt = getdata.filter((item) => item["Prompt_ID"] === promptid1);
+        } else {
+          currentPrompt = getdata.filter((item) => item["Prompt_ID"] === promptid);
+        }
+        setData(currentPrompt);
+      } else {
+        const response = await miniGaming.getsubjectivepmtnew(sequencedata?.SequenceBuilder_ID);
+        var responseData = null;
+        if (Array.isArray(response?.data)) {
+          responseData = response.data;
+        } else if (Array.isArray(response?.data?.dataset)) {
+          responseData = response.data.dataset;
+        } else if (Array.isArray(response?.data?.data)) {
+          responseData = response.data.data;
+        } else if (Array.isArray(response?.data?.results)) {
+          responseData = response.data.results;
+        } else if (response?.data && typeof response.data === 'object') {
+          const keys = Object.keys(response.data);
+          for (const key of keys) {
+            if (Array.isArray(response.data[key])) {
+              responseData = response.data[key];
+              break;
+            }
+          }
+        }
+        setData(responseData || []);
+      }
+    } catch (error) {
+      console.error("Error in fetchPrompt:", error);
+    }
+  };
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const isVisible = !document.hidden;
+      setIsTabVisible(isVisible);
+      if (isVisible && wasListeningRef.current) {
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+            setListening(true);
+            setIsSaveDisabled(true);
+          } catch (error) {
+            console.error("Error restarting recognition:", error);
+          }
+        }
+      } else if (!isVisible && listening) {
+        wasListeningRef.current = true;
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.stop();
+            setListening(false);
+          } catch (error) {
+            console.error("Error stopping recognition:", error);
+          }
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [listening]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    setIsMobileDevice(mediaQuery.matches);
+    const handleResize = () => {
+      setIsMobileDevice(mediaQuery.matches);
+    };
+    mediaQuery.addListener(handleResize);
+    return () => {
+      mediaQuery.removeListener(handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchPrompt();
+    // fetchData();
+    setIsSaveDisabled(true);
+  }, [HelloFunction, promptid]);
+
+  // ✅ Prevent tablet native keyboard when soft keyboard is visible
+  useEffect(() => {
+    const editorEl = document.querySelector(".ql-editor");
+
+    if (editorEl) {
+      const handleFocus = (e) => {
+        // Only prevent native keyboard if soft keyboard is visible AND user clicked via soft keyboard
+        // Don't prevent if user is trying to type normally
+        if (isSoftKeyboardVisible && e.target === editorEl) {
+          // Check if the focus came from a soft keyboard button click
+          const softKeyboardElement = document.querySelector('.soft-keyboard-container'); // Add appropriate class
+          if (softKeyboardElement && softKeyboardElement.contains(document.activeElement)) {
+            e.preventDefault();
+            editorEl.blur();
+          }
+        }
+      };
+
+      editorEl.addEventListener("focus", handleFocus, true); // Use capture phase
+      return () => {
+        editorEl.removeEventListener("focus", handleFocus, true);
+      };
+    }
+  }, [isSoftKeyboardVisible]);
+
+  useEffect(() => {
+    setAttendedOption(
+      prevdatasequencedata?.[0]?.Tracker_Word_arr !== undefined
+        ? prevdatasequencedata?.[0]?.Tracker_Word_arr
+        : sequencedata?.Tracker_LastWord_arr
+    );
+  }, [prevdatasequencedata]);
+
+
+  const decryptContent = (encryptedContent) => {
+    if (!encryptedContent) {
+      return null;
+    }
+    if (encryptedContent.startsWith("{}")) {
+      encryptedContent = encryptedContent.slice(2);
+    }
+    let encryptedData;
+    try {
+      encryptedData = JSON.parse(encryptedContent);
+    } catch (error) {
+      return null;
+    }
+    if (!encryptedData || !encryptedData.content) {
+      return null;
+    }
+    let decryptedContent;
+    try {
+      const bytes = CryptoJS.AES.decrypt(encryptedData.content, secretKey);
+      decryptedContent = bytes.toString(CryptoJS.enc.Utf8);
+    } catch (error) {
+      return null;
+    }
+    return decryptedContent;
+  };
+
+
+  useEffect(() => {
+    setIsSoftKeyboardVisible(false);
+    setContent("");
+    if (attendedOption) {
+      const decryptedOption = attendedOption.map((encryptedContent) => {
+        try {
+          return decryptContent(encryptedContent);
+        } catch (error) {
+          return null;
+        }
+      });
+      const filteredDecryptedOption = decryptedOption.filter(
+        (decryptedContent) => decryptedContent !== null
+      );
+      if (filteredDecryptedOption.length > 0) {
+        setContent(filteredDecryptedOption[filteredDecryptedOption.length - 1]);
+        setIsSaveDisabled(false);
+      } else {
+        setContent("");
+        setIsSaveDisabled(true);
+      }
+    } else {
+      setContent("");
+      setIsSaveDisabled(true);
+    }
+  }, [attendedOption, promptid]);
+
+
+
+
+  const blobBaseUrl =
+    "https://csg10032002b3ccc819.blob.core.windows.net/csg10032002b3ccc819/";
+
+  const handleFormSubmit = async () => {
+    const enddate = new Date();
+    if (wordCount > maxWordCount) {
+      toast.error(`Please reduce your answer by ${wordCount - maxWordCount} words to meet the ${maxWordCount} word limit.`, {
+        position: "top-center", autoClose: 3000,
+      });
+      return;
+    }
+    if (!content.trim() && recordedChunks.length === 0) {
+      toast.error("Content or media cannot be empty.", {
+        toastId: "error1", position: "top-center", autoClose: 2000,
+      });
+      return;
+    }
+    setIsSaveDisabled(true);
+    subjectiveSaveClicked(true)
+    setIsSaveClicked(true);
+    setTrackerAttemptSeq(trackerAttemptSeq + 1);
+    let isCorrect = 1;
+    const referenceAnswer = sequencedata?.Prompt_Correct_Answer_Value || sequencedata?.Prompt_Answer;
+    const isTextAnswer = recordedChunks.length === 0 && content.trim();
+    let evaldetails = null;
+    let rubrics = [];
+    try {
+      const response = await miniGaming.getRubricsListEval(sequencedata.SequenceBuilder_ID);
+      rubrics = response.data?.rubricsdashboard || [];
+    } catch (error) {
+      rubrics = [{ Rubric_Name: "Accuracy", Rubric_MaxScore: 100, SequenceBuilder_Rubric_Weightage_Perc: 100 }];
+    }
+    if (isTextAnswer && referenceAnswer) {
+      const evaluationResult = evaluateAnswer(content, referenceAnswer, {
+        levenshteinThreshold: sequencedata?.Prompt_Score_Threshold || 85,
+      });
+      isCorrect = evaluationResult.isCorrect;
+      setSimilarityResult({
+        similarity: evaluationResult.similarity.toFixed(2),
+        threshold: evaluationResult.threshold,
+        isCorrect: evaluationResult.isCorrect,
+        score: evaluationResult.score,
+      });
+      let totalCalculatedScore = 0;
+      evaldetails = {
+        "Rubric Score": {},
+        Overall_Eval: {
+          Total_Score_Perc: 0,
+          Overall_Remarks: `Automatically evaluated. Similarity: ${evaluationResult.similarity.toFixed(2)}%`,
+        },
+      };
+      if (rubrics.length === 0) {
+        rubrics = [{ Rubric_Name: "Accuracy", Rubric_MaxScore: 100, SequenceBuilder_Rubric_Weightage_Perc: 100 }];
+      }
+      rubrics.forEach((rubric) => {
+        const score = evaluationResult.score;
+        const weight = rubric.SequenceBuilder_Rubric_Weightage_Perc || 0;
+        const rubricMaxScore = rubric.Rubric_MaxScore || 100;
+        const calculatedScore = (score / rubricMaxScore) * (weight / 100);
+        totalCalculatedScore += calculatedScore;
+        evaldetails["Rubric Score"][rubric.Rubric_Name] = {
+          Score: calculatedScore,
+          Remarks: `Auto-evaluated. Similarity: ${evaluationResult.similarity.toFixed(2)}%`,
+        };
+      });
+      evaldetails.Overall_Eval.Total_Score_Perc = parseFloat(
+        totalCalculatedScore.toFixed(2) * 100
+      );
+    } else {
+      setSimilarityResult(null);
+    }
+    let mediaPath = null;
+    let newMediaUrlForDisplay = null;
+    if (recordedChunks.length) {
+      let blob, file, formData, uploadResponse;
+      if (recordingMode === 'video') {
+        blob = new Blob(recordedChunks, { type: "video/webm" });
+        file = new File([blob], "video.webm", { type: "video/webm" });
+        formData = new FormData();
+        formData.append("file", file);
+        try {
+          uploadResponse = await miniGaming.uploadvideo(formData);
+        } catch (error) {
+          console.error("Video upload error:", error.message);
+          toast.error("Video upload failed. Please try again.", { toastId: "error3", position: "top-center", autoClose: 2000 });
+          setIsSaveDisabled(false); setIsSaveClicked(false); return;
+        }
+      } else {
+        const webmBlob = new Blob(recordedChunks, { type: "audio/webm" });
+        const mp3Blob = await convertToMp3(webmBlob);
+        file = new File([mp3Blob], "audio.mp3", { type: "audio/mp3" });
+        formData = new FormData();
+        formData.append("file", file);
+        try {
+          uploadResponse = await miniGaming.uploadvideo(formData);
+        } catch (error) {
+          console.error("Audio upload error:", error.message);
+          toast.error("Audio upload failed. Please try again.", { toastId: "error3", position: "top-center", autoClose: 2000 });
+          setIsSaveDisabled(false); setIsSaveClicked(false); return;
+        }
+      }
+      mediaPath = uploadResponse.data.UserVideo_Path;
+      if (!mediaPath.startsWith("/")) {
+        mediaPath = "/" + mediaPath;
+      }
+      newMediaUrlForDisplay = `${blobBaseUrl}${mediaPath.startsWith("/") ? mediaPath.substring(1) : mediaPath}`;
+    }
+    try {
+      const encryptedContent = CryptoJS.AES.encrypt(content, secretKey).toString();
+      const contentObject = { content: encryptedContent };
+      const requestBodyString = JSON.stringify(contentObject);
+      const requestBody = {
+        Doc_Response_ULJID: sequencedata.MAXULJ_ID, Doc_Response_UserID: userid,
+        Doc_Response_LessonJourneyID: sequencedata.SequenceBuilder_LessonJourneyID, Doc_Response_SetID: sequencedata.SequenceBuilder_ChapterID,
+        Doc_Response_ParentSetID: sequencedata.Unit_ParentSetID, Doc_Response_Activity_Type_ID: sequencedata.Activity_Type_ID,
+        Doc_Response_SequenceBuilderID: sequencedata.SequenceBuilder_ID, Doc_Response_Content: requestBodyString,
+        Doc_Response_Media: mediaPath ? [mediaPath] : [], Doc_Response_Activity_Type: sequencedata.Activity_Type,
+        Doc_Response_AttemptSeq: trackerAttemptSeq, Doc_Response_PromptID: promptid,
+      };
+      await miniGaming.postsubjectiveresponse(requestBody);
+      if (evaldetails) {
+        const uljid = sequencedata.MAXULJ_ID; const sbid = sequencedata.SequenceBuilder_ID;
+        const evalid = null;
+        await miniGaming.postSubjectiveEval(uljid, sbid, evalid, JSON.stringify(evaldetails));
+      }
+      const startdate = promptStartTime.current; const enddate = new Date();
+      const diffMs = enddate - startdate; const totalSeconds = Math.floor(diffMs / 1000);
+      const hours = Math.floor(totalSeconds / 3600); const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const user = {
+        Tracker_ULJID: +sequencedata.MAXULJ_ID, Tracker_UserID: userid, Tracker_PromptID: promptid,
+        Tracker_Activity_Type_ID: sequencedata.Activity_Type_ID, Tracker_ParentSetID: sequencedata.SequenceBuilder_ChapterID,
+        Tracker_LessonJourneyID: sequencedata.SequenceBuilder_LessonJourneyID, Tracker_SetID: sequencedata.Unit_ParentSetID,
+        Tracker_Word: mediaPath, Tracker_Start_DateTime: startdate.toISOString(), Tracker_End_DateTime: enddate.toISOString(),
+        Tracker_IsCorrect: isCorrect,
+        Tracker_SequenceBuilderID: sequencedata.SequenceBuilder_ID,
+        Tracker_SequenceBuilder_IP: sequencedata.SequenceBuilder_IP,
+        Tracker_AttemptSeq: trackerAttemptSeq,
+        Tracker_Mid_Unit_Duration: formattedTime, Tracker_PoS_Element: data[sequence]?.Exit_Answer_PoS || "Subjective",
+        Tracker_RemedialSeq: 0, Tracker_UserVideo: mediaPath ? [mediaPath] : [],
+        Tracker_MicPronunciationID: !data[sequence]?.Prompt_IsMicDisabled ? +sequencedata.SequenceBuilder_Pronunciation_ID : null,
+        Tracker_IsCompleted: true, Tracker_EngagementModeID: TrackerEngagementMode,
+      };
+      await miniGaming.post_prompttracker(user);
+      setIsSuccess(true);
+      toast("Saved successfully! Please click on the Next button", { toastId: "success3", position: toast.POSITION.TOP_CENTER, autoClose: 2000, className: "toast-success" });
+      AssessmentPaginationFunction(paginationstatus);
+      if (newMediaUrlForDisplay) {
+        setSavedMediaUrl(newMediaUrlForDisplay);
+        setIsSavedMediaAudio(recordingMode === 'audio');
+        setShowVideoRecorder(false);
+      }
+      setRecordedChunks([]); setAudioUrl(null); setVideoUrl(null); setIsSaveClicked(false);
+    } catch (error) {
+      console.error("Database save error:", error);
+      toast.error(error.response?.data?.message || "An error occurred while saving. Please try again.", { toastId: "error2", position: "top-center", autoClose: 2000 });
+      setIsSaveDisabled(false); setIsSaveClicked(false);
+    }
+  };
+
+  useEffect(() => {
+    promptStartTime.current = new Date();
+  }, []);
+
+  useEffect(() => {
+    if (promptid !== prevPromptIdRef.current) {
+      const storedCounter = localStorage.getItem(`trackerAttemptSeq_${promptid}`);
+      setTrackerAttemptSeq(storedCounter ? parseInt(storedCounter, 10) : 0);
+      prevPromptIdRef.current = promptid;
+    }
+  }, [promptid]);
+
+  useEffect(() => {
+    if (prevdatasequencedata && prevdatasequencedata.length > 0) {
+      setSequence(0);
+      const question = prevdatasequencedata[0];
+      setAttendedOption(question.Tracker_Word_arr);
+      setCurrentpromptid(question.SequenceBuilder_PromptID);
+    }
+  }, [prevdatasequencedata]);
+
+  useEffect(() => {
+    localStorage.setItem(`trackerAttemptSeq_${promptid}`, trackerAttemptSeq.toString());
+  }, [promptid, trackerAttemptSeq]);
+
+  useEffect(() => {
+    // Reset recording state when promptid changes
+    // NOTE: Don't set showVideoRecorder here - let the main logic effect handle it
+    // to avoid race conditions causing UI flickering
+    setCapturing(false); setRecordedChunks([]); setVideoUrl(null); setAudioUrl(null);
+    setTimer(0); setMicAccessDenied(false);
+    setSavedMediaUrl(null); setIsSavedMediaAudio(false);
+    // Reset data loaded state so UI waits for new data before rendering
+    setIsDataLoaded(false);
+  }, [promptid]);
+
+  const handleGoBack = () => navigate("/apps/listpage");
+
+  var LangauageCode = sequencedata?.Prompt_Answer_LanguageCountryCode;
+  let paginationstatus;
+
+  const requestMicrophoneAccess = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop()); return true;
+    } catch (error) { return false; }
+  };
+
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setMicAccessDenied(true); return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true; recognition.interimResults = false;
+    recognition.lang = LangauageCode || "en-US";
+    recognition.onresult = (event) => {
+      let finalTranscript = "";
+      for (let i = lastResultIndexRef.current; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript + " ";
+          lastResultIndexRef.current = i + 1;
+        }
+      }
+      if (finalTranscript) {
+        const cleanTranscript = finalTranscript.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+        resetTranscript(cleanTranscript);
+        setContent((prev) => {
+          const cleanPrev = prev.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+          return cleanPrev ? `${cleanPrev} ${cleanTranscript}` : cleanTranscript;
+        });
+      }
+    };
+    recognition.onerror = (event) => {
+      recognitionActive.current = false; setListening(false); setIsSaveDisabled(false);
+      if (event.error === 'not-allowed') setMicAccessDenied(true);
+    };
+    lastResultIndexRef.current = 0;
+    recognitionRef.current = recognition;
+    return () => { if (recognitionRef.current) recognitionRef.current.stop(); };
+  }, [LangauageCode, promptid]);
+
+  const startListening = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
+      resetTranscript(); lastTranscriptRef.current = ""; setLiveTranscript("");
+      await SpeechRecognition.startListening({ continuous: true, language: LangauageCode || 'en-US' });
+      setListening(true); setIsSaveDisabled(true); paginationstatus = "false";
+      AssessmentPaginationFunction(paginationstatus);
+    } catch (error) { setMicAccessDenied(true); }
+  };
+
+
+  ////////////resize div
+
+     useEffect(() => {
+       const mediaQuery = window.matchMedia("(max-width: 767px)"); // Adjust max-width as per your design
+   
+       // Set initial state
+       setIsMobileDevice(mediaQuery.matches);
+   
+       // Add event listener to update state on resize
+       const handleResize = () => {
+         setIsMobileDevice(mediaQuery.matches);
+       };
+   
+       // Attach event listener
+       mediaQuery.addListener(handleResize);
+   
+       // Clean up listener
+       return () => {
+         mediaQuery.removeListener(handleResize);
+       };
+     }, []);
+  
+ ////////////resize div
+  const stopListening = () => {
+    if (!listening) return;
+    wasListeningRef.current = false; paginationstatus = "true";
+    SpeechRecognition.stopListening(); setListening(false); setIsSaveDisabled(false);
+    resetTranscript(); lastTranscriptRef.current = "";
+  };
+
+  const handleStartCaptureClick = async () => {
+    if (micAccessDenied) return;
+    const micAccessGranted = await requestMicrophoneAccess(); if (!micAccessGranted) return;
+    setCapturing(true); setTimer(0); startTimer(); setContent(""); setRecordedChunks([]);
+    setIsSaveDisabled(true); setIsSaveClicked(false); lastResultIndexRef.current = 0;
+    let stream;
+    if (recordingMode === 'video') {
+      if (webcamRef.current && webcamRef.current.stream) {
+        stream = webcamRef.current.stream;
+      } else {
+        setCapturing(false); stopTimer(); return;
+      }
+    } else {
+      stream = await getAudioStream(); if (!stream) { setCapturing(false); stopTimer(); return; }
+    }
+    const mimeType = recordingMode === 'video' ? "video/webm" : "audio/webm";
+    mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
+    mediaRecorderRef.current.addEventListener("dataavailable", handleDataAvailable);
+    mediaRecorderRef.current.start();
+  };
+
+  const startTimer = () => timerRef.current = setInterval(() => setTimer((prev) => prev + 1), 1000);
+  const stopTimer = () => { clearInterval(timerRef.current); timerRef.current = null; };
+
+  const handleStopCaptureClick = async () => {
+    setCapturing(false); stopTimer();
+    if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
+    if (audioStream) { audioStream.getTracks().forEach(track => track.stop()); setAudioStream(null); }
+    if (recordingMode === 'audio' && recordedChunks.length > 0) {
+      setTimeout(async () => {
+        const webmBlob = new Blob(recordedChunks, { type: "audio/webm" });
+        const mp3Blob = await convertToMp3(webmBlob);
+        setAudioUrl(URL.createObjectURL(mp3Blob));
+        const reader = new FileReader();
+        reader.onload = () => {
+          setRecordedChunks([new Uint8Array(reader.result)]);
+        };
+        reader.readAsArrayBuffer(mp3Blob);
+      }, 100);
+    }
+    if (recordedChunks.length > 0) setIsSaveDisabled(false);
+  };
+
+  useEffect(() => {
+    if (recordedChunks.length > 0) setIsSaveDisabled(false);
+  }, [recordedChunks]);
+
+
+  const formatTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60); const remainingSeconds = seconds % 60;
+    return `${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+  };
+
+
+  const handleDataAvailable = ({ data }) => { if (data.size > 0) setRecordedChunks((prev) => [...prev, data]); };
+
+
+  const handleDiscard = () => {
+    setRecordedChunks([]); setVideoUrl(null); setAudioUrl(null); setTimer(0);
+    resetTranscript(""); setContent(""); setIsSaveDisabled(true); setIsSaveClicked(false);
+  };
+
+  const checkMicAndShowRecorder = () => {
+    if (micAccessDenied) return false;
+    setShowVideoRecorder(true); return true;
+  }
+  const handleShowVideoRecorder = () => { setRecordingMode('video'); checkMicAndShowRecorder(); };
+  const handleShowAudioRecorder = () => { setRecordingMode('audio'); checkMicAndShowRecorder(); };
+
+  // --- START: CORRECTED HANDLER FOR RE-RECORDING ---
+  // CORRECTED VERSION
+  const handleDiscardAndRerecord = (mode) => { // <-- Accepts 'mode'
+    toast.info("Previous response discarded. You can now record a new one.", {
+      position: "top-center",
+      autoClose: 2000,
+    });
+
+    setAttendedOption(null);
+    setSavedMediaUrl(null);
+    handleDiscard();
+
+    // Use the mode that was passed in
+    setRecordingMode(mode);
+    setShowVideoRecorder(true);
+  };
+  // --- END: CORRECTED HANDLER ---
+
+  const videoPath = attendedOption?.[0]; // Use state instead of prop for consistency
+  let fullVideoUrl = null;
+  let isAudioFile = false;
+  if (videoPath) {
+    try {
+      let cleanPath = videoPath; const jsonStart = videoPath.indexOf('{"content"');
+      if (jsonStart !== -1) cleanPath = videoPath.substring(0, jsonStart);
+      const audioMatch = cleanPath.match(/[\w.-]+\.mp3/); const videoMatch = cleanPath.match(/[\w.-]+\.webm/);
+      if (audioMatch) {
+        fullVideoUrl = `${blobBaseUrl}${cleanPath.startsWith("/") ? cleanPath.substring(1) : cleanPath}`; isAudioFile = true;
+      } else if (videoMatch) {
+        fullVideoUrl = `${blobBaseUrl}${cleanPath.startsWith("/") ? cleanPath.substring(1) : cleanPath}`; isAudioFile = false;
+      } else {
+        if (cleanPath.toLowerCase().includes('.mp3')) {
+          fullVideoUrl = `${blobBaseUrl}${cleanPath.startsWith("/") ? cleanPath.substring(1) : cleanPath}`; isAudioFile = true;
+        } else if (cleanPath.toLowerCase().includes('.webm')) {
+          fullVideoUrl = `${blobBaseUrl}${cleanPath.startsWith("/") ? cleanPath.substring(1) : cleanPath}`; isAudioFile = false;
+        }
+      }
+    } catch (e) { console.error("Error parsing media path:", e); }
+  }
+
+  useEffect(() => {
+    if (!listening || !transcript) return;
+    const cleanTranscript = transcript.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    if (cleanTranscript === lastTranscriptRef.current) return;
+    const newText = cleanTranscript.slice(lastTranscriptRef.current.length).trim();
+    if (newText) {
+      lastTranscriptRef.current = cleanTranscript; setLiveTranscript(newText);
+      setContent((prev) => {
+        const prevText = prev.replace(/<[^>]*>/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        return prevText ? `${prevText} ${newText}` : newText;
+      });
+    }
+  }, [transcript, listening]);
+
+  const displayUrl = savedMediaUrl || fullVideoUrl;
+  const isAudio = savedMediaUrl ? isSavedMediaAudio : isAudioFile;
+
+  return (
+    <div>
+
+      {sequenceIP === "Benchmark" ?
+        (
+
+          <div
+            // className={`activity-container.passive-block ${
+            //   sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice
+            //     ? "activity-side-by-side"
+            //     : ""
+            // }`}
+            // style={{}}
+                       className="activity-container.passive-block"
+  style={{
+    width: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice
+      ? "calc(100% - var(--explainer-width, 20vw))"
+      : "auto",
+    float: "none",
+    marginLeft: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice
+      ? "var(--explainer-width, 20vw)"
+      : "0",
+    transition: "margin-left 0.1s ease, width 0.1s ease",
+  }}
+          >
+            <div className="activity-global-background-passage">
+              <ToastContainer />
+              <Grid className="t2t-question-line-container">
+                <Typography className="t2t-question-line" variant="h2">
+                  {data[sequence]?.Prompt}
+                </Typography>
+              </Grid>
+
+              {/* Only render the writing/speaking UI after data is loaded to prevent flickering */}
+              {isDataLoaded && !showVideoRecorder && (
+                <>
+                  <div className="jodit-editor-container">
+                    {displayUrl ? (
+                      <div className="VideoRecorder-player">
+                        {isAudio ? (
+                          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "20vh", borderRadius: "8px", flexDirection: "column", gap: "15px", padding: "20px" }}>
+                            <div style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: 'rgb(102, 102, 102)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '10px' }}>
+                              <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio File" style={{ width: '40px', height: '40px', filter: 'brightness(0) invert(1)' }} />
+                            </div>
+                            <Typography variant="" style={{ color: '#666', textAlign: 'center', marginBottom: '8px', fontSize: "16px", fontWeight: "600" }}>
+                              {savedMediaUrl ? "Your Recorded Audio Answer" : "Previously Recorded  Answer"}
+                            </Typography>
+                            <audio controls key={displayUrl} style={{ width: '100%', maxWidth: '400px', height: '40px' }}
+                              onError={() => toast.error("Unable to play audio file", { position: "top-center", autoClose: 3000 })}>
+                              <source src={displayUrl} type="audio/mp3" />
+                              <source src={displayUrl} type="audio/mpeg" />
+                              Your browser does not support the audio element.
+                            </audio>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "", backgroundColor: "", borderRadius: "8px", flexDirection: "column", gap: "2", padding: "6px" }}>
+                            <Typography variant="" style={{ color: '#666', textAlign: 'center', marginBottom: '8px', fontSize: "16px", fontWeight: "600" }}>
+                              {savedMediaUrl ? "Your Recorded Video Answer" : "Previously Recorded  Answer"}
+                            </Typography>
+                            <ReactPlayer url={displayUrl} key={displayUrl} width="" height="210px" controls style={{ minHeight: "210px" }}
+                              onError={() => toast.error("Unable to play video file", { position: "top-center", autoClose: 3000 })} />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <QuillWrapper>
+                        <ReactQuill ref={editorRef} value={content} onChange={handleContentChange}
+                          modules={{ toolbar: [[{ header: [1, 2, 3, false] }], ["bold", "italic", "underline"], ["link"], [{ list: "ordered" }, { list: "bullet" }], ["clean"]] }}
+                          formats={["header", "bold", "italic", "underline", "link", "image", "list", "bullet", "clean"]}
+                          placeholder="Type your answer here..." onPaste={handlePaste} />
+                      </QuillWrapper>
+                    )}
+                  </div>
+
+
+                  {displayUrl && (
+                    <div style={{ display: "flex", justifyContent: "center", gap: '20px', marginTop: "15px" }}>
+                      {/* Button for re-recording AUDIO */}
+                      {!data[sequence]?.Prompt_IsMicDisabled && (
+                        <button
+                          className="VideoRecorder-discardButton"
+                          onClick={() => handleDiscardAndRerecord('audio')} // <-- Pass 'audio'
+                          style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}
+                        >
+                          Re-record Audio
+                        </button>
+                      )}
+
+                      {/* Button for re-recording VIDEO */}
+                      {!data[sequence]?.Prompt_IsUserVideoDisabled && (
+                        <button
+                          className="VideoRecorder-discardButton"
+                          onClick={() => handleDiscardAndRerecord('video')} // <-- Pass 'video'
+                          style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}
+                        >
+                          Re-record Video
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+
+                  {!displayUrl && (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "center" }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', paddingInline: '8px', color: wordCount > maxWordCount ? '#d32f2f' : '#666', fontSize: '11px', width: "80%" }} className="word-text-row">
+                          {/* <span>{wordCount > maxWordCount ? `Word limit exceeded! Please reduce by ${wordCount - maxWordCount} words` : `Words remaining: ${maxWordCount - wordCount}`}</span>
+                    <span>{wordCount}/{maxWordCount} words</span> */}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "center" }}>
+                        <div style={{ display: "flex", flexDirection: "column", width: "80%" }}>
+
+                          <div style={{ padding: "", display: "", justifyContent: "space-between" }}>
+
+                            <FormControlLabel label="Use Soft Keyboard" control={<Switch checked={isSoftKeyboardVisible} onChange={(e) => setIsSoftKeyboardVisible(e.target.checked)} />} />
+                            {isSoftKeyboardVisible && (<SoftKeyboard promptLanguage={data[sequence]?.Prompt_Language} isVisible={isSoftKeyboardVisible} onKeyPress={handleSoftKeyPress} onSpacePress={handleSoftKeySpace} onBackspacePress={handleSoftKeyBackspace} />)}
+                            <div style={{ display: "flex", justifyContent: "center", border: "" }}>
+                              <div className="video-btn-div" style={{ display: "flex", justifyContent: "right", width: "100%", gap: "10px" }}>
+                                <div className="btndiv-row" style={{ display: "flex", alignSelf: "center", gap: "1em" }}>
+                                  {!showVideoRecorder && !displayUrl && (
+                                    <>
+                                      {!data[sequence]?.Prompt_IsTranscribeMicDisabled && (
+                                        <StyledButton className="stoplistening-btn" onClick={listening ? stopListening : startListening} variantType={listening ? "listening" : "notListening"}>
+                                          <img src={listening ? "/assets/images/activities/material-symbols--stop .svg" : "/assets/images/activities/eva--mic-fill.svg"} className="svg-images" alt="Mic Icon" />
+                                          {listening ? "Stop Listening..." : "Record & Transcribe"}
+                                        </StyledButton>
+                                      )}
+                                      {!data[sequence]?.Prompt_IsMicDisabled && (
+                                        <StyledButton className="record-audio-btn" onClick={handleShowAudioRecorder} variantType="notListening">
+                                          <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Icon" className="svg-images" /> Record Audio
+                                        </StyledButton>
+                                      )}
+                                      {!data[sequence]?.Prompt_IsUserVideoDisabled && (
+                                        <StyledButton className="answer-video-btn" onClick={handleShowVideoRecorder} variantType="notListening">
+                                          <img src="/assets/images/activities/video-camera.svg" alt="Video Camera Icon" className="svg-images" /> Answer by Video
+                                        </StyledButton>
+                                      )}
+                                    </>
+                                  )}
+                                  <button className={`VideoRecorder-saveButton ${isSaveDisabled || isSaveClicked ? "disabledButton" : ""}`} onClick={handleFormSubmit} disabled={isSaveDisabled || isSaveClicked} style={{ position: "relative", gap: "8px" }}>
+                                    <SaveIcon style={{ fontSize: 20 }} /> Save
+                                  </button>
+                                  {sequenceIP === "Practice" && (
+                                    <button className={`VideoRecorder-continueButton `} style={{ position: "relative", gap: "8px" }}>
+                                      <p>Continue</p>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                          </div>
+
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+
+                </>
+              )}
+
+
+              {isDataLoaded && showVideoRecorder && (
+                <div className="VideoRecorder-container">
+                  {recordingMode === 'video' && !videoUrl && (
+                    <div style={{ display: "flex", justifyContent: "center", height: "30vh", position: "relative" }}>
+                      <Webcam audio={true} audioConstraints={{ echoCancellation: true, noiseSuppression: true, autoGainControl: true }} className="VideoRecorder-webcam" ref={webcamRef} muted />
+                    </div>
+                  )}
+                  {recordingMode === 'audio' && !capturing && recordedChunks.length === 0 && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "2px" }}>
+                      <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Recording" style={{ width: '80px', height: '80px', opacity: 0.6 }} />
+                      <Typography variant="h6" style={{ color: '#666' }}></Typography>
+                    </div>
+                  )}
+                  {recordingMode === 'audio' && capturing && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "20px" }}>
+                      <PulseAnimationDiv>
+                        <img src="/assets/images/activities/eva--mic-fill.svg" alt="Recording" style={{ width: '40px', height: '40px', filter: 'brightness(0) invert(1)' }} />
+                      </PulseAnimationDiv>
+                      <Typography variant="h6" style={{ color: '#d32f2f' }}>Recording audio...</Typography>
+                    </div>
+                  )}
+                  {videoUrl && recordingMode === 'video' && (
+                    <div className="VideoRecorder-player" style={{ display: "flex", justifyContent: "center" }}>
+                      <ReactPlayer url={videoUrl} width="100%" height="24vh" controls />
+                    </div>
+                  )}
+                  {audioUrl && recordingMode === 'audio' && !capturing && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "30vh", backgroundColor: "#e8f5e8", borderRadius: "8px", flexDirection: "column", gap: "15px", padding: "10px" }}>
+                      <div style={{ width: '60px', height: '60px', borderRadius: '50%', backgroundColor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <img src="/assets/images/activities/check-icon.svg" alt="Audio Recorded" style={{ width: '30px', height: '30px', filter: 'brightness(0) invert(1)' }} />
+                      </div>
+                      <Typography variant="body1" style={{ color: '#2e7d32', textAlign: 'center' }}>Audio recorded successfully</Typography>
+                      <audio controls style={{ width: '300px' }}><source src={audioUrl} type="audio/mp3" />Your browser does not support the audio element.</audio>
+                    </div>
+                  )}
+                  <div className="VideoRecorder-buttons-container">
+                    {recordedChunks.length > 0 && recordingMode === 'audio' && !audioUrl && (
+                      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "20px" }}>
+                        <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Processing" style={{ width: '80px', height: '80px', opacity: 0.6 }} />
+
+                      </div>
+                    )}
+                    <div style={{ display: "flex", flexDirection: "row", gap: "15px", alignItems: "center", justifyContent: "center", marginTop: "2px", marginBottom: "4px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <img src="assets/images/activities/timer-svgrepo-com.png" className="clock-icon" alt="Timer" style={{ width: '40px', height: '40px' }} />
+                        <Typography style={{ fontSize: "16px", fontWeight: "600", color: capturing ? '#d32f2f' : '#666' }}>{formatTime(timer)}</Typography>
+                      </div>
+                      {!capturing && recordedChunks.length === 0 && (
+                        <button className="VideoRecorder-captureButton" onClick={handleStartCaptureClick} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", borderRadius: "6px", border: "none", backgroundColor: "#673ab7", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}>
+                          <span className="recording-dot"><span className="white-dot"></span></span>   {recordingMode === 'audio' ? 'Record your Answer' : 'Start Video Recording'}
+                        </button>
+                      )}
+                      {capturing && (
+                        <button className="VideoRecorder-captureButton" onClick={handleStopCaptureClick} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", borderRadius: "6px", border: "none", backgroundColor: "#d32f2f", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}>
+                          <span className="recording-dot"><span className="white-dot"></span></span> Stop Recording
+                        </button>
+                      )}
+                      {!capturing && recordedChunks.length > 0 && (
+                        <button className="VideoRecorder-saveButton" onClick={handleFormSubmit} disabled={!recordedChunks.length} style={{ borderRadius: "6px", border: "none", backgroundColor: "#8866B7", color: "#FFFFFF", cursor: recordedChunks.length ? "pointer" : "not-allowed", fontSize: "14px", fontWeight: "500", opacity: recordedChunks.length ? 1 : 0.6, gap: "8px" }}>
+                          <SaveIcon style={{ fontSize: 20 }} /> Save
+                        </button>
+                      )}
+                    </div>
+                    {!capturing && recordedChunks.length > 0 && (
+                      <div style={{ display: "flex", justifyContent: "center", marginTop: "15px" }}>
+                        <button className="VideoRecorder-discardButton" onClick={handleDiscard} disabled={!recordedChunks.length} style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}>
+                          Discard & Record Again
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+        ) :
+
+
+        (
+<div  
+           className="activity-container.passive-block"
+  style={{
+    width: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice
+      ? "calc(100% - var(--explainer-width, 20vw))"
+      : "auto",
+    float: "none",
+    marginLeft: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice
+      ? "var(--explainer-width, 20vw)"
+      : "0",
+    transition: "margin-left 0.1s ease, width 0.1s ease",
+  }}
+  
+  >
+          <div
+            // className="activity-container"
+            // style={{
+            //   width: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice ? "100%" : "auto",
+            //   float: sb_ExplainerActivityType === "MPInfo1_Explainer" && !isMobileDevice ? "right" : "none",
+            // }}
+          >
+            <div className="activity-global-background-passage">
+              <ToastContainer />
+              <Grid className="t2t-question-line-container">
+                <Typography className="t2t-question-line" variant="h2">
+                  {data[sequence]?.Prompt}
+                </Typography>
+              </Grid>
+
+              {/* Only render the writing/speaking UI after data is loaded to prevent flickering */}
+              {isDataLoaded && !showVideoRecorder && (
+                <>
+                  <div className="jodit-editor-container">
+                    {displayUrl ? (
+                      <div className="VideoRecorder-player">
+                        {isAudio ? (
+                          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "20vh", borderRadius: "8px", flexDirection: "column", gap: "15px", padding: "20px" }}>
+                            <div style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: 'rgb(102, 102, 102)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '10px' }}>
+                              <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio File" style={{ width: '40px', height: '40px', filter: 'brightness(0) invert(1)' }} />
+                            </div>
+                            <Typography variant="" style={{ color: '#666', textAlign: 'center', marginBottom: '8px', fontSize: "16px", fontWeight: "600" }}>
+                              {savedMediaUrl ? "Your Recorded Audio Answer" : "Previously Recorded  Answer"}
+                            </Typography>
+                            <audio controls key={displayUrl} style={{ width: '100%', maxWidth: '400px', height: '40px' }}
+                              onError={() => toast.error("Unable to play audio file", { position: "top-center", autoClose: 3000 })}>
+                              <source src={displayUrl} type="audio/mp3" />
+                              <source src={displayUrl} type="audio/mpeg" />
+                              Your browser does not support the audio element.
+                            </audio>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "", backgroundColor: "", borderRadius: "8px", flexDirection: "column", gap: "2", padding: "6px" }}>
+                            <Typography variant="" style={{ color: '#666', textAlign: 'center', marginBottom: '8px', fontSize: "16px", fontWeight: "600" }}>
+                              {savedMediaUrl ? "Your Recorded Video Answer" : "Previously Recorded  Answer"}
+                            </Typography>
+                            <ReactPlayer url={displayUrl} key={displayUrl} width="" height="210px" controls style={{ minHeight: "210px" }}
+                              onError={() => toast.error("Unable to play video file", { position: "top-center", autoClose: 3000 })} />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <QuillWrapper>
+                        <ReactQuill ref={editorRef} value={content} onChange={handleContentChange}
+                          modules={{ toolbar: [[{ header: [1, 2, 3, false] }], ["bold", "italic", "underline"], ["link"], [{ list: "ordered" }, { list: "bullet" }], ["clean"]] }}
+                          formats={["header", "bold", "italic", "underline", "link", "image", "list", "bullet", "clean"]}
+                          placeholder="Type your answer here..." onPaste={handlePaste} />
+                      </QuillWrapper>
+                    )}
+                  </div>
+
+                  {displayUrl && (
+                    <div style={{ display: "flex", justifyContent: "center", gap: '20px', marginTop: "15px" }}>
+                      {/* Button for re-recording AUDIO */}
+                      {!data[sequence]?.Prompt_IsMicDisabled && !isAudioSaved && (
+                        <button
+                          className="VideoRecorder-discardButton"
+                          onClick={() => handleDiscardAndRerecord('audio')} // <-- Pass 'audio'
+                          style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}
+                        >
+                          Re-record Audio
+                        </button>
+                      )}
+
+                      {/* Button for re-recording VIDEO */}
+                      {!data[sequence]?.Prompt_IsUserVideoDisabled && isVideoSaved && (
+                        <button
+                          className="VideoRecorder-discardButton"
+                          onClick={() => handleDiscardAndRerecord('video')} // <-- Pass 'video'
+                          style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}
+                        >
+                          Re-record Video
+                        </button>
+                      )}
+                      {sequenceIP === "Practice" && (
+                        <button
+                          className="VideoRecorder-continueButton1"
+                          style={{ position: "relative", gap: "8px" }}
+                          // disabled={!isSuccess } // disables the button until isSaveClicked is true
+                          onClick={handleContinue}
+                        >
+                          <p>Continue</p>
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+
+                  {!displayUrl && (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "center" }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', paddingInline: '8px', color: wordCount > maxWordCount ? '#d32f2f' : '#666', fontSize: '11px', width: "80%" }} className="word-text-row">
+                          {/* <span>{wordCount > maxWordCount ? `Word limit exceeded! Please reduce by ${wordCount - maxWordCount} words` : `Words remaining: ${maxWordCount - wordCount}`}</span>
+                    <span>{wordCount}/{maxWordCount} words</span> */}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "center" }}>
+                        <div style={{ display: "flex", flexDirection: "column", width: "80%" }}>
+
+                          <div style={{ padding: "", display: "", justifyContent: "space-between" }}>
+
+                            <FormControlLabel label="Use Soft Keyboard" control={<Switch checked={isSoftKeyboardVisible} onChange={(e) => setIsSoftKeyboardVisible(e.target.checked)} />} />
+                            <div style={{ display: "flex", justifyContent: "center", flexDirection: "column" }}>
+                              {isSoftKeyboardVisible && (<SoftKeyboard promptLanguage={data[sequence]?.Prompt_Language} isVisible={isSoftKeyboardVisible} onKeyPress={handleSoftKeyPress} onSpacePress={handleSoftKeySpace} onBackspacePress={handleSoftKeyBackspace} />)}
+                              <div className="video-btn-div" style={{ display: "flex", justifyContent: "right", width: "100%", gap: "10px" }}>
+                                <div className="btndiv-row" style={{ display: "flex", alignSelf: "center", gap: "1em" }}>
+                                  {!showVideoRecorder && !displayUrl && (
+                                    <>
+                                      {!data[sequence]?.Prompt_IsTranscribeMicDisabled && (
+                                        <StyledButton className="stoplistening-btn" onClick={listening ? stopListening : startListening} variantType={listening ? "listening" : "notListening"} >
+                                          <img src={listening ? "/assets/images/activities/material-symbols--stop .svg" : "/assets/images/activities/eva--mic-fill.svg"} className="svg-images" alt="Mic Icon" />
+                                          {listening ? "Stop Listening..." : "Record & Transcribe"}
+                                        </StyledButton>
+                                      )}
+                                      {!data[sequence]?.Prompt_IsMicDisabled && (
+                                        <StyledButton className="record-audio-btn" onClick={handleShowAudioRecorder} variantType="notListening">
+                                          <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Icon" className="svg-images" /> Record Audio
+                                        </StyledButton>
+                                      )}
+                                      {!data[sequence]?.Prompt_IsUserVideoDisabled && (
+                                        <StyledButton className="answer-video-btn" onClick={handleShowVideoRecorder} variantType="notListening">
+                                          <img src="/assets/images/activities/video-camera.svg" alt="Video Camera Icon" className="svg-images" /> Answer by Video
+                                        </StyledButton>
+                                      )}
+                                    </>
+                                  )}
+                                  <button className={`VideoRecorder-saveButton ${isSaveDisabled || isSaveClicked ? "disabledButton" : ""}`} onClick={handleFormSubmit} disabled={isSaveDisabled || isSaveClicked} style={{ position: "relative", gap: "8px" }}>
+                                    <SaveIcon style={{ fontSize: 20 }} /> Save
+                                  </button>
+                                  {sequenceIP === "Practice" && (
+                                    <button
+                                      className="VideoRecorder-continueButton"
+                                      style={{ position: "relative", gap: "8px" }}
+                                      disabled={!isSuccess} // disables the button until isSaveClicked is true
+                                      onClick={handleContinue}
+                                    >
+                                      <p>Continue</p>
+                                    </button>
+                                  )}
+
+
+                                </div>
+                              </div>
+                            </div>
+
+                          </div>
+
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+
+                </>
+              )}
+
+
+              {isDataLoaded && showVideoRecorder && (
+                <div className="VideoRecorder-container">
+                  {recordingMode === 'video' && !videoUrl && (
+                    <div style={{ display: "flex", justifyContent: "center", height: "30vh", position: "relative" }}>
+                      <Webcam audio={true} audioConstraints={{ echoCancellation: true, noiseSuppression: true, autoGainControl: true }} className="VideoRecorder-webcam" ref={webcamRef} muted />
+                    </div>
+                  )}
+                  {recordingMode === 'audio' && !capturing && recordedChunks.length === 0 && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "2px" }}>
+                      <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Recording" style={{ width: '80px', height: '80px', opacity: 0.6 }} />
+                      <Typography variant="h6" style={{ color: '#666' }}></Typography>
+                    </div>
+                  )}
+                  {recordingMode === 'audio' && capturing && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "20px" }}>
+                      <PulseAnimationDiv>
+                        <img src="/assets/images/activities/eva--mic-fill.svg" alt="Recording" style={{ width: '40px', height: '40px', filter: 'brightness(0) invert(1)' }} />
+                      </PulseAnimationDiv>
+                      <Typography variant="h6" style={{ color: '#d32f2f' }}>Recording audio...</Typography>
+                    </div>
+                  )}
+                  {videoUrl && recordingMode === 'video' && (
+                    <div className="VideoRecorder-player" style={{ display: "flex", justifyContent: "center" }}>
+                      <ReactPlayer url={videoUrl} width="100%" height="24vh" controls />
+                    </div>
+                  )}
+                  {audioUrl && recordingMode === 'audio' && !capturing && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "30vh", backgroundColor: "#e8f5e8", borderRadius: "8px", flexDirection: "column", gap: "15px", padding: "10px" }}>
+                      <div style={{ width: '60px', height: '60px', borderRadius: '50%', backgroundColor: '#4caf50', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <img src="/assets/images/activities/check-icon.svg" alt="Audio Recorded" style={{ width: '30px', height: '30px', filter: 'brightness(0) invert(1)' }} />
+                      </div>
+                      <Typography variant="body1" style={{ color: '#2e7d32', textAlign: 'center' }}>Audio recorded successfully</Typography>
+                      <audio controls style={{ width: '300px' }}><source src={audioUrl} type="audio/mp3" />Your browser does not support the audio element.</audio>
+                    </div>
+                  )}
+                  <div className="VideoRecorder-buttons-container">
+                    {recordedChunks.length > 0 && recordingMode === 'audio' && !audioUrl && (
+                      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "28vh", flexDirection: "column", gap: "20px" }}>
+                        <img src="/assets/images/activities/eva--mic-fill.svg" alt="Audio Processing" style={{ width: '80px', height: '80px', opacity: 0.6 }} />
+
+                      </div>
+                    )}
+                    <div style={{ display: "flex", flexDirection: "row", gap: "15px", alignItems: "center", justifyContent: "center", marginTop: "2px", marginBottom: "4px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <img src="assets/images/activities/timer-svgrepo-com.png" className="clock-icon" alt="Timer" style={{ width: '40px', height: '40px' }} />
+                        <Typography style={{ fontSize: "16px", fontWeight: "600", color: capturing ? '#d32f2f' : '#666' }}>{formatTime(timer)}</Typography>
+                      </div>
+                      {!capturing && recordedChunks.length === 0 && (
+                        <button className="VideoRecorder-captureButton" onClick={handleStartCaptureClick} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", borderRadius: "6px", border: "none", backgroundColor: "#673ab7", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}>
+                          <span className="recording-dot"><span className="white-dot"></span></span>   {recordingMode === 'audio' ? 'Record your Answer' : 'Start Video Recording'}
+                        </button>
+                      )}
+                      {capturing && (
+                        <button className="VideoRecorder-captureButton" onClick={handleStopCaptureClick} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", borderRadius: "6px", border: "none", backgroundColor: "#d32f2f", color: "white", cursor: "pointer", fontSize: "14px", fontWeight: "500" }}>
+                          <span className="recording-dot"><span className="white-dot"></span></span> Stop Recording
+                        </button>
+                      )}
+                      {!capturing && recordedChunks.length > 0 && (
+                        <button className="VideoRecorder-saveButton" onClick={handleFormSubmit} disabled={!recordedChunks.length} style={{ borderRadius: "6px", border: "none", backgroundColor: "#8866B7", color: "#FFFFFF", cursor: recordedChunks.length ? "pointer" : "not-allowed", fontSize: "14px", fontWeight: "500", opacity: recordedChunks.length ? 1 : 0.6, gap: "8px" }}>
+                          <SaveIcon style={{ fontSize: 20 }} /> Save
+                        </button>
+                      )}
+                    </div>
+                    {!capturing && recordedChunks.length > 0 && (
+                      <div style={{ display: "flex", justifyContent: "center", marginTop: "15px" }}>
+                        <button className="VideoRecorder-discardButton" onClick={handleDiscard} disabled={!recordedChunks.length} style={{ background: "none", border: "none", textDecoration: "underline", fontSize: "14px", fontWeight: "bold", cursor: "pointer", color: "#666" }}>
+                          Discard & Record Again
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+   </div>
+        )
+      }
+    </div>
+  );
+}
