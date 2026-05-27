@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env
 .DS_Store
+
+# ScannerFlow exclusions
+ScannerFlow/backend/uploads/
+ScannerFlow/backend/mongodb_data/
+ScannerFlow/backend.zip
